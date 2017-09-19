@@ -15,6 +15,8 @@ import Data.List
 import Data.Function
 import Data.Default
 import qualified Data.Map as M
+import Data.Time.Clock
+import Data.Time.Calendar
 
 import Control.Arrow ((&&&))
 
@@ -31,6 +33,8 @@ import ExRender.Haddock ()
 import ExRender.License ()
 import ExRender.Dependency ()
 
+import System.IO.Unsafe (unsafePerformIO)
+
 data ExCabalEnv = ExCabalEnv
     { exGHCVersion :: Version
     , exCopyright :: Doc
@@ -44,11 +48,17 @@ instance Default ExCabalEnv where
             (CompilerId GHC ver) -> ver
             x -> error $ "Unsupported compiler " ++ show x
         , exCopyright = vcat
-            [ "# Copyright 2015 Mykola Orliuk <virkony@gmail.com>"
+            [ "# Copyright " <> integer currentYear
+                             <> " Mykola Orliuk <virkony@gmail.com>"
             , "# Distributed under the terms of the GNU General Public License v2"
             ]
         , exBugsTo = "virkony@gmail.com"
         }
+      where
+        -- unsafePerformIO is fine here, we just care about the year
+        (currentYear, _, _) = toGregorian
+                                . utctDay
+                                $ unsafePerformIO getCurrentTime
 
 class ExRenderPackage a where
     type ExPackageEnv a
