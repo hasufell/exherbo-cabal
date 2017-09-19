@@ -4,7 +4,7 @@
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 {-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE UnicodeSyntax, ViewPatterns #-}
+{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleInstances #-}
 
@@ -32,17 +32,17 @@ import ExRender.License ()
 import ExRender.Dependency ()
 
 data ExCabalEnv = ExCabalEnv
-    { exGHCVersion ∷ Version
-    , exCopyright ∷ Doc
-    , exBugsTo ∷ String
+    { exGHCVersion :: Version
+    , exCopyright :: Doc
+    , exBugsTo :: String
     }
     deriving (Show)
 
 instance Default ExCabalEnv where
     def = ExCabalEnv
         { exGHCVersion = case buildCompilerId of
-            (CompilerId GHC ver) → ver
-            x → error $ "Unsupported compiler " ++ show x
+            (CompilerId GHC ver) -> ver
+            x -> error $ "Unsupported compiler " ++ show x
         , exCopyright = vcat
             [ "# Copyright 2015 Mykola Orliuk <virkony@gmail.com>"
             , "# Distributed under the terms of the GNU General Public License v2"
@@ -52,7 +52,7 @@ instance Default ExCabalEnv where
 
 class ExRenderPackage a where
     type ExPackageEnv a
-    exDispPkg ∷ ExPackageEnv a → a → Doc
+    exDispPkg :: ExPackageEnv a -> a -> Doc
 
 instance ExRender GenericPackageDescription where
     exDisp = exDispPkg def
@@ -87,8 +87,8 @@ instance ExRenderPackage GenericPackageDescription where
                 binDeps = filter (not . ignoredBinDep) (collectBinDeps env descr)
 
         exTestDeps = case condTestSuites descr of
-            [] → empty
-            _ → exDepFn "haskell_test_dependencies" testDeps where
+            [] -> empty
+            _ -> exDepFn "haskell_test_dependencies" testDeps where
                 testDeps = filter (not . ignoredTestDep) (collectTestDeps env descr)
 
         exDependencies = vcat [
@@ -138,8 +138,8 @@ instance ExRenderPackage GenericPackageDescription where
 
 -- |Collect dependencies from all 'CondTree' nodes of
 -- 'GenericPackageDescription' using provided view
-collectDeps ∷ ExCabalEnv → (GenericPackageDescription → [CondTree ConfVar [Dependency] a])
-              → GenericPackageDescription → [Dependency]
+collectDeps :: ExCabalEnv -> (GenericPackageDescription -> [CondTree ConfVar [Dependency] a])
+              -> GenericPackageDescription -> [Dependency]
 collectDeps env view descr = concatMap build (view descr) where
     flags = M.fromList . map (flagName &&& id) $ genPackageFlags descr
     eval (Var (Flag k)) = flagDefault . fromJust $ M.lookup k flags
@@ -157,31 +157,31 @@ collectDeps env view descr = concatMap build (view descr) where
 
     build t = condTreeConstraints t ++ concatMap buildOptional (condTreeComponents t)
 
-    buildOptional (eval → True, t, _) = build t
+    buildOptional (eval -> True, t, _) = build t
     buildOptional (_, _, Just t) = build t
     buildOptional (_, _, Nothing) = []
 
-collectLibDeps, collectBinDeps, collectTestDeps ∷ ExCabalEnv → GenericPackageDescription → [Dependency]
+collectLibDeps, collectBinDeps, collectTestDeps :: ExCabalEnv -> GenericPackageDescription -> [Dependency]
 collectLibDeps env = collectDeps env (maybeToList . condLibrary)
 collectBinDeps env = collectDeps env (map snd . condExecutables)
 collectTestDeps env = collectDeps env (map snd . condTestSuites)
 
 -- | Render 'a' to a final Exheres
-exRenderPkg ∷ ExRenderPackage a ⇒ ExPackageEnv a → a → String
+exRenderPkg :: ExRenderPackage a => ExPackageEnv a -> a -> String
 exRenderPkg env = (++ "\n") . render . exDispPkg env
 
 -- |Sort dependencies according to Exherbo order
-sortDeps ∷ [Dependency] → [Dependency]
+sortDeps :: [Dependency] -> [Dependency]
 sortDeps = sortBy (compare `on` display)
 
 -- |Merge sorted deps to through applying the most tighten ones
-mergeSortedDeps ∷ [Dependency] → [Dependency]
+mergeSortedDeps :: [Dependency] -> [Dependency]
 mergeSortedDeps [] = []
 mergeSortedDeps [x] = [x]
 mergeSortedDeps (x:y:z) = case (x, y) of
-    (Dependency n v, Dependency n' v') | n == n' →
+    (Dependency n v, Dependency n' v') | n == n' ->
         mergeSortedDeps (Dependency n (intersectVersionRanges v v') : z)
-    _ → x : mergeSortedDeps (y:z)
+    _ -> x : mergeSortedDeps (y:z)
 
 -- TODO: drop test deps that already in build
 -- TODO: use renderStyle instead of manual wrapping
