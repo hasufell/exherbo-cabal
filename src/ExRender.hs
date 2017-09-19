@@ -31,7 +31,7 @@ import Documentation.Haddock.Parser
 import ExRender.Base
 import ExRender.Haddock ()
 import ExRender.License ()
-import ExRender.Dependency ()
+import ExRender.Dependency
 
 import System.IO.Unsafe (unsafePerformIO)
 
@@ -86,20 +86,27 @@ instance ExRenderPackage GenericPackageDescription where
                 nest 4 . vcat . map exDisp . mergeSortedDeps $ sortDeps deps,
                 "\")"]
 
+        allDeps   = collectAllDeps env descr
+        hlibDeps  = filter (\d -> isHLib  d && (not . ignoredDep . toCabalDep $ d)) allDeps
+        hbinDeps  = filter (\d -> isHBin  d && (not . ignoredDep . toCabalDep $ d)) allDeps
+        htestDeps = filter (\d -> isHTest d && (not . ignoredDep . toCabalDep $ d)) allDeps
+        pkgDeps   = filter (\d -> isPKG   d && (not . ignoredDep . toCabalDep $ d)) allDeps
+        setupDeps = filter (\d -> isSetup d && (not . ignoredDep . toCabalDep $ d)) allDeps
+
         exLibDeps | null libDeps = empty
                   | otherwise = exDepFn "haskell_lib_dependencies" libDeps
             where
-                libDeps = filter (not . ignoredDep) (collectLibDeps env descr)
+                libDeps = filter (not . ignoredDep . toCabalDep) (collectLibDeps env descr)
 
         exBinDeps | null binDeps = empty
                   | otherwise = exDepFn "haskell_bin_dependencies" binDeps
             where
-                binDeps = filter (not . ignoredBinDep) (collectBinDeps env descr)
+                binDeps = filter (not . ignoredBinDep . toCabalDep) (collectBinDeps env descr)
 
         exTestDeps = case condTestSuites descr of
             [] -> empty
             _ -> exDepFn "haskell_test_dependencies" testDeps where
-                testDeps = filter (not . ignoredTestDep) (collectTestDeps env descr)
+                testDeps = filter (not . ignoredTestDep . toCabalDep) (collectTestDeps env descr)
 
         exDependencies = vcat [
             "DEPENDENCIES=\"",
@@ -148,9 +155,13 @@ instance ExRenderPackage GenericPackageDescription where
 
 -- |Collect dependencies from all 'CondTree' nodes of
 -- 'GenericPackageDescription' using provided view
-collectDeps :: ExCabalEnv -> (GenericPackageDescription -> [CondTree ConfVar [Dependency] a])
-              -> GenericPackageDescription -> [Dependency]
-collectDeps env view descr = concatMap build (view descr) where
+collectDeps :: ExCabalEnv
+            -> (GenericPackageDescription -> [CondTree ConfVar [Dependency] a])
+            -> (a -> BuildInfo)
+            -> (Dependency -> ExDependency)
+            -> GenericPackageDescription
+            -> [ExDependency]
+collectDeps env view getBInfo constr descr = concatMap build (view descr) where
     flags = M.fromList . map (flagName &&& id) $ genPackageFlags descr
     eval (Var (Flag k)) = flagDefault . fromJust $ M.lookup k flags
     eval (Var (OS Linux)) = True -- TODO: solve this hard-coded OS assumption
@@ -165,16 +176,23 @@ collectDeps env view descr = concatMap build (view descr) where
     eval (CAnd a b) = eval a && eval b
     -- eval e = error $ "Unsupported expr " ++ show e
 
-    build t = condTreeConstraints t ++ concatMap buildOptional (condTreeComponents t)
+    build t = (allDeps . getBInfo . condTreeData $ t)
+                ++ concatMap buildOptional (condTreeComponents t)
 
     buildOptional (eval -> True, t, _) = build t
     buildOptional (_, _, Just t) = build t
     buildOptional (_, _, Nothing) = []
 
-collectLibDeps, collectBinDeps, collectTestDeps :: ExCabalEnv -> GenericPackageDescription -> [Dependency]
-collectLibDeps env = collectDeps env (maybeToList . condLibrary)
-collectBinDeps env = collectDeps env (map snd . condExecutables)
-collectTestDeps env = collectDeps env (map snd . condTestSuites)
+    allDeps bi = targetDeps bi ++ pkgDeps bi ++ setupDeps
+    setupDeps = fmap Setup . maybe [] setupDepends . setupBuildInfo $ packageDescription descr
+    targetDeps = fmap constr . targetBuildDepends
+    pkgDeps = fmap PKG . pkgconfigDepends
+
+collectAllDeps :: ExCabalEnv -> GenericPackageDescription -> [ExDependency]
+collectAllDeps env pkgdesc =
+     collectDeps env (maybeToList . condLibrary) libBuildInfo HLib pkgdesc
+  ++ collectDeps env (map snd . condExecutables) buildInfo HBin pkgdesc
+  ++ collectDeps env (map snd . condTestSuites) testBuildInfo HTest pkgdesc
 
 -- | Render 'a' to a final Exheres
 exRenderPkg :: ExRenderPackage a => ExPackageEnv a -> a -> String

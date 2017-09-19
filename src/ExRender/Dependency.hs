@@ -7,13 +7,46 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleInstances #-}
 
-module ExRender.Dependency () where
+module ExRender.Dependency (ExDependency(..), DepScope(..), DepType(..), Flag(..), toCabalDep, isLib, isExec, isTest, isSetup, isBuildRun, isBuildTool, isSystem, hasFlag) where
 
+import Data.List (find)
 import Distribution.Text
 import Distribution.Package
 import Distribution.Version
 
 import ExRender.Base
+
+
+data ExDependency = ExDep DepScope Flag Dependency
+
+data DepScope = Library    DepType
+              | Executable DepType
+              | Test       DepType
+              | HSetup              -- custom-setup -> setup-depends
+
+data DepType = BuildRun   -- build-depends (haskell only)
+             | Buildtool  -- build-tools (haskell only)
+             | PKG        -- pkgconfig-depends
+             | ExtraLibs  -- extra-libraries
+
+data Flag = Flag String
+          | None
+
+
+toCabalDep :: ExDependency -> Dependency
+toCabalDep (ExDep _ _ d) = d
+
+isLib, isExec, isTest, isSetup, hasFlag :: ExDependency -> Bool
+isLib (ExDep Library{} _ _)     = True
+isLib _                         = False
+isExec (ExDep Executable{} _ _) = True
+isExec _                        = False
+isTest (ExDep Test{} _ _)       = True
+isTest _                        = False
+isSetup (ExDep HSetup{} _ _)    = True
+isSetup _                       = False
+hasFlag (ExDep _ None _)      = False
+hasFlag _                       = True
 
 instance ExRender LowerBound where
     exDisp (LowerBound v InclusiveBound) = ">=" <> disp v
@@ -96,8 +129,21 @@ instance ExRender VersionRange where
         (concatMap exVersions -> exVis) | not $ null exVis -> nbrackets . hcat $ punctuate (char '|') exVis
         _ -> error $ "Unsupported version range: " ++ display vr
 
-instance ExRender Dependency where
-    exDisp (Dependency n vr) = "dev-haskell/" <> disp n <> exDisp vr
+instance ExRender ExDependency where
+    exDisp (ExDep _ System _ (Dependency n vr))
+      = maybe ("??? " <> disp n) (\(_, x) -> text x <> exDisp vr)
+         $ find (\(x, _) -> x == unPackageName n) pkgConfigDepMap
+    exDisp (ExDep _ _ _ (Dependency n vr))
+      = "dev-haskell/" <> disp n <> exDisp vr
+
+
+-- | Map a pkg-config dependency package name to an exherbo package name.
+pkgConfigDepMap :: [(String, String)]
+pkgConfigDepMap = [
+  ("gtk+-2.0", "x11-libs/gtk+:2"),
+  ("gthread-2.0", "dev-libs/glib")
+  ]
+
 
 -- $setup
 --
