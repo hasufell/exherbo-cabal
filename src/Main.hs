@@ -16,7 +16,7 @@ import Data.Monoid
 import Data.Default
 import Data.ByteString.Lazy.Char8 (unpack)
 
-import Options.Applicative hiding (maybeReader)
+import Options.Applicative
 
 import System.IO
 import System.FilePath
@@ -37,10 +37,6 @@ import qualified Text.Regex.PCRE.Light.Char8 as R
 
 import ExRender
 
-maybeReader ∷ (String → Maybe a) → ReadM a
-maybeReader f = eitherReader $ \case
-    (f → Just x) → return x
-    arg → Left $ "cannot parse value `" ++ arg ++ "'"
 
 textAuto ∷ Text a ⇒ ReadM a
 textAuto = maybeReader simpleParse
