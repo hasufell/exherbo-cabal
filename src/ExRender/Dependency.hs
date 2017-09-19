@@ -7,9 +7,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleInstances #-}
 
-module ExRender.Dependency (ExDependency(..), DepScope(..), DepType(..), Flag(..), toCabalDep, isLib, isExec, isTest, isSetup, isBuildRun, isBuildTool, isSystem, hasFlag) where
+module ExRender.Dependency (CabalDependency(..), DepScope(..), DepType(..), Flag(..), toRawDep) where
 
-import Data.List (find)
+import Data.Default
+import Data.List
 import Distribution.Text
 import Distribution.Package
 import Distribution.Version
@@ -17,36 +18,85 @@ import Distribution.Version
 import ExRender.Base
 
 
-data ExDependency = ExDep DepScope Flag Dependency
+-- |Extended cabal dependencies, maintaining all
+-- the info we need.
+data CabalDependency = CabalDep DepScope Flag Dependency
 
-data DepScope = Library    DepType
-              | Executable DepType
-              | Test       DepType
-              | HSetup              -- custom-setup -> setup-depends
+data DepScope = LibS  DepType
+              | ExecS DepType
+              | TestS DepType
+              | SetupS   -- custom-setup -> setup-depends
 
-data DepType = BuildRun   -- build-depends (haskell only)
-             | Buildtool  -- build-tools (haskell only)
-             | PKG        -- pkgconfig-depends
-             | ExtraLibs  -- extra-libraries
+data DepType = BuildRunT   -- build-depends (haskell only)
+             | BuildtoolT  -- build-tools (haskell only)
+             | PkgT        -- pkgconfig-depends
+             | ExtraLibsT  -- extra-libraries
 
 data Flag = Flag String
           | None
 
 
-toCabalDep :: ExDependency -> Dependency
-toCabalDep (ExDep _ _ d) = d
+toRawDep :: CabalDependency -> Dependency
+toRawDep (CabalDep _ _ d) = d
 
-isLib, isExec, isTest, isSetup, hasFlag :: ExDependency -> Bool
-isLib (ExDep Library{} _ _)     = True
-isLib _                         = False
-isExec (ExDep Executable{} _ _) = True
-isExec _                        = False
-isTest (ExDep Test{} _ _)       = True
-isTest _                        = False
-isSetup (ExDep HSetup{} _ _)    = True
-isSetup _                       = False
-hasFlag (ExDep _ None _)      = False
-hasFlag _                       = True
+
+-- |Maps the cabal dependency structure into a format more close
+-- to exheres.
+data ExDepTree = ExDepTree [FlagDeps] ExDeps
+
+instance Default ExDepTree where
+  def = ExDepTree [] def
+
+data FlagDeps = FlagDeps String ExDeps
+
+data ExDeps = ExDeps {
+    haskellLib  :: [Dependency] -- haskell_lib_dependencies(), build+run
+  , haskellBin  :: [Dependency] -- haskell_bin_dependencies(), build+run
+  , haskellTest :: [Dependency] -- haskell_test_dependencies(), test
+  , build       :: BuildDeps    -- build deps
+  , test        :: TestDepsSys  -- other test deps (system)
+  }
+
+instance Default ExDeps where
+  def = ExDeps [] [] [] def def
+
+-- |Build-only dependencies.
+data BuildDeps = Build {
+    bPkg    :: [Dependency] -- system
+  , bExtraL :: [Dependency] -- system
+  , bBuildT :: [Dependency] -- haskell
+  , bSetupD :: [Dependency] -- haskell
+  }
+
+instance Default BuildDeps where
+  def = Build [] [] [] []
+
+-- |Test dependencies that are not haskell ones.
+data TestDepsSys = TDS {
+    tPkg   :: [Dependency]
+  , tExtra :: [Dependency]
+  }
+
+instance Default TestDepsSys where
+  def = TDS [] []
+
+
+toExDependencies :: [CabalDependency] -> ExDepTree
+toExDependencies cs = go cs def
+  where
+    go :: [CabalDependency] -> ExDepTree -> ExDepTree
+    go [] ed = ed
+    go ((CabalDep (LibS BuildRunT) None d):csd) (ExDepTree f exd)
+      = go csd $ ExDepTree f exd{ haskellLib = (d : haskellLib exd)  }
+    go ((CabalDep (ExecS BuildRunT) None d):csd) (ExDepTree f exd)
+      = go csd $ ExDepTree f exd{ haskellBin = (d : haskellBin exd)  }
+    go ((CabalDep (TestS BuildRunT) None d):csd) (ExDepTree f exd)
+      = go csd $ ExDepTree f exd{ haskellTest = (d : haskellTest exd)  }
+    go ((CabalDep SetupS None d):csd) (ExDepTree f exd)
+      = go csd $ ExDepTree f exd{ build = Build { bSetupD = [d] }   }
+
+
+
 
 instance ExRender LowerBound where
     exDisp (LowerBound v InclusiveBound) = ">=" <> disp v
@@ -129,12 +179,12 @@ instance ExRender VersionRange where
         (concatMap exVersions -> exVis) | not $ null exVis -> nbrackets . hcat $ punctuate (char '|') exVis
         _ -> error $ "Unsupported version range: " ++ display vr
 
-instance ExRender ExDependency where
-    exDisp (ExDep _ System _ (Dependency n vr))
-      = maybe ("??? " <> disp n) (\(_, x) -> text x <> exDisp vr)
-         $ find (\(x, _) -> x == unPackageName n) pkgConfigDepMap
-    exDisp (ExDep _ _ _ (Dependency n vr))
-      = "dev-haskell/" <> disp n <> exDisp vr
+{- instance ExRender ExDependency where -}
+    {- exDisp (ExDep _ System _ (Dependency n vr)) -}
+      {- = maybe ("??? " <> disp n) (\(_, x) -> text x <> exDisp vr) -}
+         {- $ find (\(x, _) -> x == unPackageName n) pkgConfigDepMap -}
+    {- exDisp (ExDep _ _ _ (Dependency n vr)) -}
+      {- = "dev-haskell/" <> disp n <> exDisp vr -}
 
 
 -- | Map a pkg-config dependency package name to an exherbo package name.
