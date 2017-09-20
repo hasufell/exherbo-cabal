@@ -81,39 +81,39 @@ instance ExRenderPackage GenericPackageDescription where
         ignoredBinDep (Dependency n _) | n == nameSelf = True
         ignoredBinDep d = ignoredDep d
 
-        exDepFn name deps = vcat [
-                text ("$(" ++ name) <> " \"",
-                nest 4 . vcat . map exDisp . mergeSortedDeps $ sortDeps deps,
-                "\")"]
+        {- exDepFn name deps = vcat [ -}
+                {- text ("$(" ++ name) <> " \"", -}
+                {- nest 4 . vcat . map exDisp . mergeSortedDeps $ sortDeps deps, -}
+                {- "\")"] -}
 
-        allDeps   = collectAllDeps env descr
-        hlibDeps  = filter (\d -> isHLib  d && (not . ignoredDep . toCabalDep $ d)) allDeps
-        hbinDeps  = filter (\d -> isHBin  d && (not . ignoredDep . toCabalDep $ d)) allDeps
-        htestDeps = filter (\d -> isHTest d && (not . ignoredDep . toCabalDep $ d)) allDeps
-        pkgDeps   = filter (\d -> isPKG   d && (not . ignoredDep . toCabalDep $ d)) allDeps
-        setupDeps = filter (\d -> isSetup d && (not . ignoredDep . toCabalDep $ d)) allDeps
+        {- allDeps   = collectAllDeps env descr -}
+        {- hlibDeps  = filter (\d -> isHLib  d && (not . ignoredDep . toCabalDep $ d)) allDeps -}
+        {- hbinDeps  = filter (\d -> isHBin  d && (not . ignoredDep . toCabalDep $ d)) allDeps -}
+        {- htestDeps = filter (\d -> isHTest d && (not . ignoredDep . toCabalDep $ d)) allDeps -}
+        {- pkgDeps   = filter (\d -> isPKG   d && (not . ignoredDep . toCabalDep $ d)) allDeps -}
+        {- setupDeps = filter (\d -> isSetup d && (not . ignoredDep . toCabalDep $ d)) allDeps -}
 
-        exLibDeps | null libDeps = empty
-                  | otherwise = exDepFn "haskell_lib_dependencies" libDeps
-            where
-                libDeps = filter (not . ignoredDep . toCabalDep) (collectLibDeps env descr)
+        {- exLibDeps | null libDeps = empty -}
+                  {- | otherwise = exDepFn "haskell_lib_dependencies" libDeps -}
+            {- where -}
+                {- libDeps = filter (not . ignoredDep . toCabalDep) (collectLibDeps env descr) -}
 
-        exBinDeps | null binDeps = empty
-                  | otherwise = exDepFn "haskell_bin_dependencies" binDeps
-            where
-                binDeps = filter (not . ignoredBinDep . toCabalDep) (collectBinDeps env descr)
+        {- exBinDeps | null binDeps = empty -}
+                  {- | otherwise = exDepFn "haskell_bin_dependencies" binDeps -}
+            {- where -}
+                {- binDeps = filter (not . ignoredBinDep . toCabalDep) (collectBinDeps env descr) -}
 
-        exTestDeps = case condTestSuites descr of
-            [] -> empty
-            _ -> exDepFn "haskell_test_dependencies" testDeps where
-                testDeps = filter (not . ignoredTestDep . toCabalDep) (collectTestDeps env descr)
+        {- exTestDeps = case condTestSuites descr of -}
+            {- [] -> empty -}
+            {- _ -> exDepFn "haskell_test_dependencies" testDeps where -}
+                {- testDeps = filter (not . ignoredTestDep . toCabalDep) (collectTestDeps env descr) -}
 
-        exDependencies = vcat [
-            "DEPENDENCIES=\"",
-            nest 4 exLibDeps,
-            nest 4 exTestDeps,
-            nest 4 exBinDeps,
-            "\""]
+        {- exDependencies = vcat [ -}
+            {- "DEPENDENCIES=\"", -}
+            {- nest 4 exLibDeps, -}
+            {- nest 4 exTestDeps, -}
+            {- nest 4 exBinDeps, -}
+            {- "\""] -}
 
         pkgDescr = packageDescription descr
 
@@ -146,8 +146,8 @@ instance ExRenderPackage GenericPackageDescription where
             exField "LICENCES" (render . exDisp $ license pkgDescr),
             exSlot,
             exField "PLATFORMS" "~amd64",
-            "",
-            exDependencies,
+            {- "", -}
+            {- exDependencies, -}
             "",
             exField "BUGS_TO" (exBugsTo env),
             ""
@@ -155,44 +155,44 @@ instance ExRenderPackage GenericPackageDescription where
 
 -- |Collect dependencies from all 'CondTree' nodes of
 -- 'GenericPackageDescription' using provided view
-collectDeps :: ExCabalEnv
-            -> (GenericPackageDescription -> [CondTree ConfVar [Dependency] a])
-            -> (a -> BuildInfo)
-            -> (Dependency -> ExDependency)
-            -> GenericPackageDescription
-            -> [ExDependency]
-collectDeps env view getBInfo constr descr = concatMap build (view descr) where
-    flags = M.fromList . map (flagName &&& id) $ genPackageFlags descr
-    eval (Var (Flag k)) = flagDefault . fromJust $ M.lookup k flags
-    eval (Var (OS Linux)) = True -- TODO: solve this hard-coded OS assumption
-    eval (Var (OS _)) = False
-    eval (Var (Arch X86_64)) = True -- TODO: support other platforms besides amd64
-    eval (Var (Arch _)) = False
-    eval (Var (Impl GHC vr)) = exGHCVersion env `withinRange` vr
-    eval (Var (Impl _ _)) = False -- XXX: no support for non-GHC compilers
-    eval (Lit f) = f
-    eval (CNot e) = not (eval e)
-    eval (COr a b) = eval a || eval b
-    eval (CAnd a b) = eval a && eval b
-    -- eval e = error $ "Unsupported expr " ++ show e
+{- collectDeps :: ExCabalEnv -}
+            {- -> (GenericPackageDescription -> [CondTree ConfVar [Dependency] a]) -}
+            {- -> (a -> BuildInfo) -}
+            {- -> (Dependency -> ExDependency) -}
+            {- -> GenericPackageDescription -}
+            {- -> [ExDependency] -}
+{- collectDeps env view getBInfo constr descr = concatMap build (view descr) where -}
+    {- flags = M.fromList . map (flagName &&& id) $ genPackageFlags descr -}
+    {- eval (Var (Flag k)) = flagDefault . fromJust $ M.lookup k flags -}
+    {- eval (Var (OS Linux)) = True -- TODO: solve this hard-coded OS assumption -}
+    {- eval (Var (OS _)) = False -}
+    {- eval (Var (Arch X86_64)) = True -- TODO: support other platforms besides amd64 -}
+    {- eval (Var (Arch _)) = False -}
+    {- eval (Var (Impl GHC vr)) = exGHCVersion env `withinRange` vr -}
+    {- eval (Var (Impl _ _)) = False -- XXX: no support for non-GHC compilers -}
+    {- eval (Lit f) = f -}
+    {- eval (CNot e) = not (eval e) -}
+    {- eval (COr a b) = eval a || eval b -}
+    {- eval (CAnd a b) = eval a && eval b -}
+    {- -- eval e = error $ "Unsupported expr " ++ show e -}
 
-    build t = (allDeps . getBInfo . condTreeData $ t)
-                ++ concatMap buildOptional (condTreeComponents t)
+    {- build t = (allDeps . getBInfo . condTreeData $ t) -}
+                {- ++ concatMap buildOptional (condTreeComponents t) -}
 
-    buildOptional (eval -> True, t, _) = build t
-    buildOptional (_, _, Just t) = build t
-    buildOptional (_, _, Nothing) = []
+    {- buildOptional (eval -> True, t, _) = build t -}
+    {- buildOptional (_, _, Just t) = build t -}
+    {- buildOptional (_, _, Nothing) = [] -}
 
-    allDeps bi = targetDeps bi ++ pkgDeps bi ++ setupDeps
-    setupDeps = fmap Setup . maybe [] setupDepends . setupBuildInfo $ packageDescription descr
-    targetDeps = fmap constr . targetBuildDepends
-    pkgDeps = fmap PKG . pkgconfigDepends
+    {- allDeps bi = targetDeps bi ++ pkgDeps bi ++ setupDeps -}
+    {- setupDeps = fmap Setup . maybe [] setupDepends . setupBuildInfo $ packageDescription descr -}
+    {- targetDeps = fmap constr . targetBuildDepends -}
+    {- pkgDeps = fmap PKG . pkgconfigDepends -}
 
-collectAllDeps :: ExCabalEnv -> GenericPackageDescription -> [ExDependency]
-collectAllDeps env pkgdesc =
-     collectDeps env (maybeToList . condLibrary) libBuildInfo HLib pkgdesc
-  ++ collectDeps env (map snd . condExecutables) buildInfo HBin pkgdesc
-  ++ collectDeps env (map snd . condTestSuites) testBuildInfo HTest pkgdesc
+{- collectAllDeps :: ExCabalEnv -> GenericPackageDescription -> [ExDependency] -}
+{- collectAllDeps env pkgdesc = -}
+     {- collectDeps env (maybeToList . condLibrary) libBuildInfo HLib pkgdesc -}
+  {- ++ collectDeps env (map snd . condExecutables) buildInfo HBin pkgdesc -}
+  {- ++ collectDeps env (map snd . condTestSuites) testBuildInfo HTest pkgdesc -}
 
 -- | Render 'a' to a final Exheres
 exRenderPkg :: ExRenderPackage a => ExPackageEnv a -> a -> String

@@ -3,14 +3,19 @@
 
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
-{-# LANGUAGE ViewPatterns, LambdaCase #-}
+{-# LANGUAGE ViewPatterns, PatternSynonyms, LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module ExRender.Dependency (CabalDependency(..), DepScope(..), DepType(..), Flag(..), toRawDep) where
 
+import Control.Lens
+import Control.Monad.ST
 import Data.Default
 import Data.List
+import Data.Maybe
+import Data.STRef
 import Distribution.Text
 import Distribution.Package
 import Distribution.Version
@@ -36,66 +41,146 @@ data Flag = Flag String
           | None
 
 
+getDepType :: CabalDependency -> Maybe DepType
+getDepType (CabalDep (LibS d) _ _)  = Just d
+getDepType (CabalDep (ExecS d) _ _) = Just d
+getDepType (CabalDep (TestS d) _ _) = Just d
+getDepType _                        = Nothing
+
+pattern HasDepType :: CabalDependency -> CabalDependency
+pattern HasDepType d <- ((\x -> (isJust (getDepType x), x)) -> (True, d))
+
+
 toRawDep :: CabalDependency -> Dependency
 toRawDep (CabalDep _ _ d) = d
 
 
 -- |Maps the cabal dependency structure into a format more close
 -- to exheres.
-data ExDepTree = ExDepTree [FlagDeps] ExDeps
+data ExDepTree = ExDepTree {
+    _flagsDeps :: [FlagDeps]
+  , _exDeps :: ExDeps
+  }
+  deriving (Show)
 
 instance Default ExDepTree where
   def = ExDepTree [] def
 
-data FlagDeps = FlagDeps String ExDeps
+
+data FlagDeps = FlagDeps {
+    _flagName :: String
+  , _flagDep :: [ExDeps]
+  }
+  deriving (Show)
+
 
 data ExDeps = ExDeps {
-    haskellLib  :: [Dependency] -- haskell_lib_dependencies(), build+run
-  , haskellBin  :: [Dependency] -- haskell_bin_dependencies(), build+run
-  , haskellTest :: [Dependency] -- haskell_test_dependencies(), test
-  , build       :: BuildDeps    -- build deps
-  , test        :: TestDepsSys  -- other test deps (system)
+    _haskellLib  :: [Dependency] -- haskell_lib_dependencies(), build+run
+  , _haskellBin  :: [Dependency] -- haskell_bin_dependencies(), build+run
+  , _haskellTest :: [Dependency] -- haskell_test_dependencies(), test
+  , _build       :: BuildDeps    -- build deps
+  , _test        :: TestDepsSys  -- other test deps (system)
   }
+  deriving (Show)
 
 instance Default ExDeps where
   def = ExDeps [] [] [] def def
 
+
 -- |Build-only dependencies.
 data BuildDeps = Build {
-    bPkg    :: [Dependency] -- system
-  , bExtraL :: [Dependency] -- system
-  , bBuildT :: [Dependency] -- haskell
-  , bSetupD :: [Dependency] -- haskell
+    _bPkg    :: [Dependency] -- system
+  , _bExtraL :: [Dependency] -- system
+  , _bBuildT :: [Dependency] -- haskell
+  , _bSetupD :: [Dependency] -- haskell
   }
+  deriving (Show)
 
 instance Default BuildDeps where
   def = Build [] [] [] []
 
+
 -- |Test dependencies that are not haskell ones.
 data TestDepsSys = TDS {
-    tPkg   :: [Dependency]
-  , tExtra :: [Dependency]
+    _tPkg    :: [Dependency]
+  , _tExtra  :: [Dependency]
   }
+  deriving (Show)
 
 instance Default TestDepsSys where
   def = TDS [] []
+
+
+makeLenses ''ExDepTree
+makeLenses ''FlagDeps
+makeLenses ''ExDeps
+makeLenses ''BuildDeps
+makeLenses ''TestDepsSys
 
 
 toExDependencies :: [CabalDependency] -> ExDepTree
 toExDependencies cs = go cs def
   where
     go :: [CabalDependency] -> ExDepTree -> ExDepTree
-    go [] ed = ed
-    go ((CabalDep (LibS BuildRunT) None d):csd) (ExDepTree f exd)
-      = go csd $ ExDepTree f exd{ haskellLib = (d : haskellLib exd)  }
-    go ((CabalDep (ExecS BuildRunT) None d):csd) (ExDepTree f exd)
-      = go csd $ ExDepTree f exd{ haskellBin = (d : haskellBin exd)  }
-    go ((CabalDep (TestS BuildRunT) None d):csd) (ExDepTree f exd)
-      = go csd $ ExDepTree f exd{ haskellTest = (d : haskellTest exd)  }
-    go ((CabalDep SetupS None d):csd) (ExDepTree f exd)
-      = go csd $ ExDepTree f exd{ build = Build { bSetupD = [d] }   }
+    go [] exd = exd
 
+    go ((CabalDep (LibS BuildRunT) None d):csd) exd
+      = go csd (over (exDeps . haskellLib) (d:) $ exd)
+    go ((CabalDep (ExecS BuildRunT) None d):csd) exd
+      = go csd (over (exDeps . haskellBin) (d:) $ exd)
+    go ((CabalDep (TestS BuildRunT) None d):csd) exd
+      = go csd (over (exDeps . haskellTest) (d:) $ exd)
 
+    go ((CabalDep (LibS BuildtoolT) None d):csd) exd
+      = go csd (over (exDeps . build . bBuildT) (d:) $ exd)
+    go ((CabalDep (ExecS BuildtoolT) None d):csd) exd
+      = go csd (over (exDeps . build . bBuildT) (d:) $ exd)
+    go ((CabalDep (TestS BuildtoolT) None d):csd) exd
+      = go csd (over (exDeps . haskellTest) (d:) $ exd)
+
+    go ((CabalDep (LibS PkgT) None d):csd) exd
+      = go csd (over (exDeps . build . bPkg) (d:) $ exd)
+    go ((CabalDep (ExecS PkgT) None d):csd) exd
+      = go csd (over (exDeps . build . bPkg) (d:) $ exd)
+    go ((CabalDep (TestS PkgT) None d):csd) exd
+      = go csd (over (exDeps . test . tPkg) (d:) $ exd)
+
+    go ((CabalDep (LibS ExtraLibsT) None d):csd) exd
+      = go csd (over (exDeps . build . bExtraL) (d:) $ exd)
+    go ((CabalDep (ExecS ExtraLibsT) None d):csd) exd
+      = go csd (over (exDeps . build . bExtraL) (d:) $ exd)
+    go ((CabalDep (TestS ExtraLibsT) None d):csd) exd
+      = go csd (over (exDeps . test . tExtra) (d:) $ exd)
+
+    go ((CabalDep SetupS None d):csd) exd
+      = go csd (over (exDeps . build . bSetupD) (d:) $ exd)
+
+    go (_:csd) exd = go csd exd
+
+    {- addDep :: CabalDependency -> ExDepTree -> ExDepTree -}
+    {- addDep (CabalDep (ExecS BuildtoolT) None d) exd -}
+      {- = over (exDeps . haskellLib) (d:) $ exd -}
+    {- addDep (CabalDep (ExecS BuildtoolT) (Flag name) d) exd -}
+      {- = case existingFlag = find (\(FlagDeps n _) n == name) of -}
+             {- Nothing -> -}
+             {- Just f -}
+        {- in over (exDeps . haskellLib) (d:) $ exd -}
+
+    addToFlag :: [FlagDeps] -> String -> ExDeps -> [FlagDeps]
+    addToFlag flags fname' deps' = runST $ do
+      ref <- newSTRef False -- whether we inserted successfully
+      go flags fname' deps' ref
+      where
+        go :: [FlagDeps] -> String -> ExDeps -> STRef s Bool -> ST s [FlagDeps]
+        go [] fname deps ref = do
+          v <- readSTRef ref
+          if v then return []
+               else return [FlagDeps fname [deps]]
+        go (p@(FlagDeps n ds):fs) fname deps ref
+          | n == fname = do
+              writeSTRef ref True
+              return $ (FlagDeps n (deps:ds)):fs
+          | otherwise  = fmap (p:) $ go fs fname deps ref
 
 
 instance ExRender LowerBound where
