@@ -8,14 +8,13 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module ExRender.Dependency (CabalDependency(..), DepScope(..), DepType(..), Flag(..), toRawDep) where
+module ExRender.Dependency where
 
 import Control.Lens
-import Control.Monad.ST
 import Data.Default
-import Data.List
 import Data.Maybe
-import Data.STRef
+import Data.Set (Set)
+import qualified Data.Set as Set
 import Distribution.Text
 import Distribution.Package
 import Distribution.Version
@@ -25,7 +24,7 @@ import ExRender.Base
 
 -- |Extended cabal dependencies, maintaining all
 -- the info we need.
-data CabalDependency = CabalDep DepScope Flag Dependency
+data CabalDependency = CD DepScope (Set Flag) Dependency
 
 data DepScope = LibS  DepType
               | ExecS DepType
@@ -37,44 +36,35 @@ data DepType = BuildRunT   -- build-depends (haskell only)
              | PkgT        -- pkgconfig-depends
              | ExtraLibsT  -- extra-libraries
 
-data Flag = Flag String
-          | None
-
-
-getDepType :: CabalDependency -> Maybe DepType
-getDepType (CabalDep (LibS d) _ _)  = Just d
-getDepType (CabalDep (ExecS d) _ _) = Just d
-getDepType (CabalDep (TestS d) _ _) = Just d
-getDepType _                        = Nothing
-
-pattern HasDepType :: CabalDependency -> CabalDependency
-pattern HasDepType d <- ((\x -> (isJust (getDepType x), x)) -> (True, d))
+newtype Flag = Flag String
+  deriving (Show)
 
 
 toRawDep :: CabalDependency -> Dependency
-toRawDep (CabalDep _ _ d) = d
+toRawDep (CD _ _ d) = d
 
 
 -- |Maps the cabal dependency structure into a format more close
 -- to exheres.
-data ExDepTree = ExDepTree {
-    _flagsDeps :: [FlagDeps]
+data ExDepTree = EDT {
+    _flagsDeps :: [FlagsTree]
   , _exDeps :: ExDeps
   }
   deriving (Show)
 
 instance Default ExDepTree where
-  def = ExDepTree [] def
+  def = EDT [] mempty
 
 
-data FlagDeps = FlagDeps {
-    _flagName :: String
-  , _flagDep :: [ExDeps]
+data FlagsTree = FT {
+    _flag :: Flag
+  , _flagDep :: ExDeps
+  , _subFlags :: Maybe FlagsTree
   }
   deriving (Show)
 
 
-data ExDeps = ExDeps {
+data ExDeps = ED {
     _haskellLib  :: [Dependency] -- haskell_lib_dependencies(), build+run
   , _haskellBin  :: [Dependency] -- haskell_bin_dependencies(), build+run
   , _haskellTest :: [Dependency] -- haskell_test_dependencies(), test
@@ -83,12 +73,14 @@ data ExDeps = ExDeps {
   }
   deriving (Show)
 
-instance Default ExDeps where
-  def = ExDeps [] [] [] def def
+instance Monoid ExDeps where
+  mempty = ED [] [] [] mempty mempty
+  mappend (ED hl hb ht b t) (ED hl' hb' ht' b' t')
+    = ED (hl ++ hl') (hb ++ hb') (ht ++ ht') (mappend b b') (mappend t t')
 
 
 -- |Build-only dependencies.
-data BuildDeps = Build {
+data BuildDeps = BD {
     _bPkg    :: [Dependency] -- system
   , _bExtraL :: [Dependency] -- system
   , _bBuildT :: [Dependency] -- haskell
@@ -96,8 +88,10 @@ data BuildDeps = Build {
   }
   deriving (Show)
 
-instance Default BuildDeps where
-  def = Build [] [] [] []
+instance Monoid BuildDeps where
+  mempty = BD [] [] [] []
+  mappend (BD p e b s) (BD p' e' b' s')
+    = BD (p ++ p') (e ++ e') (b ++ b') (s ++ s')
 
 
 -- |Test dependencies that are not haskell ones.
@@ -107,80 +101,62 @@ data TestDepsSys = TDS {
   }
   deriving (Show)
 
-instance Default TestDepsSys where
-  def = TDS [] []
+instance Monoid TestDepsSys where
+  mempty = TDS [] []
+  mappend (TDS p e) (TDS p' e') = TDS (p ++ p') (e ++ e')
 
 
 makeLenses ''ExDepTree
-makeLenses ''FlagDeps
+makeLenses ''FlagsTree
 makeLenses ''ExDeps
 makeLenses ''BuildDeps
 makeLenses ''TestDepsSys
 
 
 toExDependencies :: [CabalDependency] -> ExDepTree
-toExDependencies cs = go cs def
+toExDependencies cs = foldr addDep def cs
   where
-    go :: [CabalDependency] -> ExDepTree -> ExDepTree
-    go [] exd = exd
-
-    go ((CabalDep (LibS BuildRunT) None d):csd) exd
-      = go csd (over (exDeps . haskellLib) (d:) $ exd)
-    go ((CabalDep (ExecS BuildRunT) None d):csd) exd
-      = go csd (over (exDeps . haskellBin) (d:) $ exd)
-    go ((CabalDep (TestS BuildRunT) None d):csd) exd
-      = go csd (over (exDeps . haskellTest) (d:) $ exd)
-
-    go ((CabalDep (LibS BuildtoolT) None d):csd) exd
-      = go csd (over (exDeps . build . bBuildT) (d:) $ exd)
-    go ((CabalDep (ExecS BuildtoolT) None d):csd) exd
-      = go csd (over (exDeps . build . bBuildT) (d:) $ exd)
-    go ((CabalDep (TestS BuildtoolT) None d):csd) exd
-      = go csd (over (exDeps . haskellTest) (d:) $ exd)
-
-    go ((CabalDep (LibS PkgT) None d):csd) exd
-      = go csd (over (exDeps . build . bPkg) (d:) $ exd)
-    go ((CabalDep (ExecS PkgT) None d):csd) exd
-      = go csd (over (exDeps . build . bPkg) (d:) $ exd)
-    go ((CabalDep (TestS PkgT) None d):csd) exd
-      = go csd (over (exDeps . test . tPkg) (d:) $ exd)
-
-    go ((CabalDep (LibS ExtraLibsT) None d):csd) exd
-      = go csd (over (exDeps . build . bExtraL) (d:) $ exd)
-    go ((CabalDep (ExecS ExtraLibsT) None d):csd) exd
-      = go csd (over (exDeps . build . bExtraL) (d:) $ exd)
-    go ((CabalDep (TestS ExtraLibsT) None d):csd) exd
-      = go csd (over (exDeps . test . tExtra) (d:) $ exd)
-
-    go ((CabalDep SetupS None d):csd) exd
-      = go csd (over (exDeps . build . bSetupD) (d:) $ exd)
-
-    go (_:csd) exd = go csd exd
-
-    {- addDep :: CabalDependency -> ExDepTree -> ExDepTree -}
-    {- addDep (CabalDep (ExecS BuildtoolT) None d) exd -}
-      {- = over (exDeps . haskellLib) (d:) $ exd -}
-    {- addDep (CabalDep (ExecS BuildtoolT) (Flag name) d) exd -}
-      {- = case existingFlag = find (\(FlagDeps n _) n == name) of -}
-             {- Nothing -> -}
-             {- Just f -}
-        {- in over (exDeps . haskellLib) (d:) $ exd -}
-
-    addToFlag :: [FlagDeps] -> String -> ExDeps -> [FlagDeps]
-    addToFlag flags fname' deps' = runST $ do
-      ref <- newSTRef False -- whether we inserted successfully
-      go flags fname' deps' ref
+    addDep :: CabalDependency -> ExDepTree -> ExDepTree
+    addDep (CD scope fl d) exd
+      = case scope of
+             -- nicely mapping the cabal to exherbo structure
+             SetupS           -> ins (build . bSetupD)
+             TestS BuildRunT  -> ins  haskellTest
+             TestS BuildtoolT -> ins  haskellTest
+             TestS PkgT       -> ins (test . tPkg)
+             TestS ExtraLibsT -> ins (test . tExtra)
+             LibS  BuildtoolT -> ins (build . bBuildT)
+             LibS  PkgT       -> ins (build . bPkg)
+             LibS  ExtraLibsT -> ins (build . bExtraL)
+             ExecS BuildtoolT -> ins (build . bBuildT)
+             ExecS PkgT       -> ins (build . bPkg)
+             ExecS ExtraLibsT -> ins (build . bExtraL)
+             LibS  BuildRunT  -> ins  haskellLib
+             ExecS BuildRunT  -> ins  haskellBin
       where
-        go :: [FlagDeps] -> String -> ExDeps -> STRef s Bool -> ST s [FlagDeps]
-        go [] fname deps ref = do
-          v <- readSTRef ref
-          if v then return []
-               else return [FlagDeps fname [deps]]
-        go (p@(FlagDeps n ds):fs) fname deps ref
-          | n == fname = do
-              writeSTRef ref True
-              return $ (FlagDeps n (deps:ds)):fs
-          | otherwise  = fmap (p:) $ go fs fname deps ref
+        ins f = over (exDeps . f) (d:) $ exd
+        {- ins f = case flag of -}
+                     {- None   -> over (exDeps . f) (d:) $ exd -}
+                     {- Flag n -> over flagsDeps -}
+                                    {- (\x -> addToFlags x n $ over f (d:)) -}
+                                    {- $ exd -}
+
+
+-- |Adds the given ExDeps to the given list of FlagDeps. If the
+-- flagname already exists in the input list, the ExDeps are added
+-- to that FlagDeps element, otherwise a new FlagDeps element is created.
+{- addToFlags :: [FlagDeps]         -- ^ input list -}
+           {- -> String             -- ^ flagname -}
+           {- -> (ExDeps -> ExDeps) -- ^ lens setter -}
+           {- -> [FlagDeps] -}
+{- addToFlags flags fname' setter = -}
+  {- foldr (\x@(FlagDeps name deps) go b -> -}
+              {- if name == fname' -}
+                 {- then (FlagDeps name (setter deps)) : go True -}
+                 {- else x : go b) -}
+        {- (\b -> if b then [] else [FlagDeps fname' (setter mempty)]) -}
+        {- flags -}
+        {- False -}
 
 
 instance ExRender LowerBound where
