@@ -24,18 +24,24 @@ import ExRender.Base
 
 -- |Extended cabal dependencies, maintaining all
 -- the info we need.
+-- A dependency has a scope (e.g. library, binary, ...)
+-- and might depend on multiple cabal flags.
 data CabalDependency = CD DepScope (Set Flag) Dependency
 
-data DepScope = LibS  DepType
-              | ExecS DepType
-              | TestS DepType
-              | SetupS   -- custom-setup -> setup-depends
+-- |A scope is the "section" where the dependency is defined
+-- (e.g. library, binary...).
+data DepScope = Lib  DepType
+              | Exec DepType
+              | Test DepType
+              | Setup   -- custom-setup -> setup-depends
 
-data DepType = BuildRunT   -- build-depends (haskell only)
-             | BuildtoolT  -- build-tools (haskell only)
-             | PkgT        -- pkgconfig-depends
-             | ExtraLibsT  -- extra-libraries
+-- |A dependency can be of a specific type.
+data DepType = BuildRun   -- build-depends (haskell only)
+             | Buildtool  -- build-tools (haskell only)
+             | Pkg        -- pkgconfig-depends
+             | ExtraLibs  -- extra-libraries
 
+-- |A cabal flag.
 newtype Flag = Flag String
   deriving (Show)
 
@@ -45,21 +51,23 @@ toRawDep (CD _ _ d) = d
 
 
 -- |Maps the cabal dependency structure into a format more close
--- to exheres.
+-- to exheres. We structure the format in two parts. First, dependencies
+-- that are not behind any sort of flag, second, a tree of flags with
+-- potential dependencies at any depth.
 data ExDepTree = EDT {
-    _flagsDeps :: [FlagsTree]
-  , _exDeps :: ExDeps
+    _exDeps :: ExDeps
+  , _flagsDeps :: [FlagsTree]
   }
   deriving (Show)
 
 instance Default ExDepTree where
-  def = EDT [] mempty
+  def = EDT mempty []
 
 
 data FlagsTree = FT {
     _flag :: Flag
   , _flagDep :: ExDeps
-  , _subFlags :: Maybe FlagsTree
+  , _subFlags :: [FlagsTree]
   }
   deriving (Show)
 
@@ -120,19 +128,19 @@ toExDependencies cs = foldr addDep def cs
     addDep (CD scope fl d) exd
       = case scope of
              -- nicely mapping the cabal to exherbo structure
-             SetupS           -> ins (build . bSetupD)
-             TestS BuildRunT  -> ins  haskellTest
-             TestS BuildtoolT -> ins  haskellTest
-             TestS PkgT       -> ins (test . tPkg)
-             TestS ExtraLibsT -> ins (test . tExtra)
-             LibS  BuildtoolT -> ins (build . bBuildT)
-             LibS  PkgT       -> ins (build . bPkg)
-             LibS  ExtraLibsT -> ins (build . bExtraL)
-             ExecS BuildtoolT -> ins (build . bBuildT)
-             ExecS PkgT       -> ins (build . bPkg)
-             ExecS ExtraLibsT -> ins (build . bExtraL)
-             LibS  BuildRunT  -> ins  haskellLib
-             ExecS BuildRunT  -> ins  haskellBin
+             Setup           -> ins (build . bSetupD)
+             Test BuildRun  -> ins  haskellTest
+             Test Buildtool -> ins  haskellTest
+             Test Pkg       -> ins (test . tPkg)
+             Test ExtraLibs -> ins (test . tExtra)
+             Lib  Buildtool -> ins (build . bBuildT)
+             Lib  Pkg       -> ins (build . bPkg)
+             Lib  ExtraLibs -> ins (build . bExtraL)
+             Exec Buildtool -> ins (build . bBuildT)
+             Exec Pkg       -> ins (build . bPkg)
+             Exec ExtraLibs -> ins (build . bExtraL)
+             Lib  BuildRun  -> ins  haskellLib
+             Exec BuildRun  -> ins  haskellBin
       where
         ins f = over (exDeps . f) (d:) $ exd
         {- ins f = case flag of -}
